@@ -1,0 +1,331 @@
+#include <iostream>
+#include <type_traits>
+#include <vector>
+#include <list>
+#include <string>
+#include <sstream>
+#include <exception>
+#include <cassert>
+
+/*
+ * Class OutOfRangeException
+ * Exception thrown when indexed out of bounds.
+ * This exception must be only thrown in debug builds.
+ */
+class OutOfRangeException: public std::runtime_error
+{
+public:
+    OutOfRangeException(size_t container_size, 
+                        size_t indexed_size): std::runtime_error("Out of range")
+                                            , container_size_(container_size)
+                                            , indexed_size_(indexed_size)
+    {}
+
+    virtual const char* what() const throw() {
+        oss_.clear();
+        oss_ << std::runtime_error::what() << "\n"
+        << "Container size = " << container_size_ << "\n"
+        << "Indexed size = " << indexed_size_;
+
+        return oss_.str().c_str();
+    }
+
+    virtual ~OutOfRangeException() {}
+private:
+    size_t container_size_ = 0;
+    size_t indexed_size_ = 0;
+    static std::ostringstream oss_;
+};
+
+std::ostringstream OutOfRangeException::oss_;
+
+
+
+enum Position {
+    beg = 0,
+    end,
+    all,
+};
+
+//Fwd decl slice
+template <typename> class slice;
+
+//NOTE: slice in no way controls the life time of the
+// underlying container vector or list
+// The lifetime is controlled by external agents, you!
+
+template <typename Container>
+slice<Container>
+make_slice(Container& cont, size_t end_pos)
+{
+    return slice<Container>(cont, end_pos);
+}
+
+template <typename Container>
+slice<Container>
+make_slice(Container& cont, size_t start_pos, size_t end_pos)
+{
+    return slice<Container>(cont, start_pos, end_pos);
+}
+
+
+/*
+ * Cliqued detail namespace hiding the implementation stuff
+ * which are container based.
+ */
+namespace detail {
+
+    //ATTN: The second template parameter to this base class
+    // is really unfortunate.
+    // I cannot use Derived::container_type as during compilation
+    // 'Derived' is still an incomplete type and this leads
+    // to circular reference and hence cannot be resolved.
+    // auto return is a solution but that is creepy
+    // and will be distasteful in this case.
+
+    template <class Derived, class Container>
+    class BaseSlice {
+    public:
+        virtual slice<Container> operator() (int64_t start_pos, int64_t end_pos);
+        virtual slice<Container> operator() (Position pos, int64_t end_pos);
+        virtual slice<Container> operator() (int64_t start_pos, Position pos);
+        virtual slice<Container> operator() (Position pos);
+    };
+
+    template <class Derived, class Container>
+    auto BaseSlice<Derived, Container>::operator() (int64_t start_pos, int64_t end_pos)
+    -> slice<Container>
+    {
+        //TODO: throw out of range
+        return make_slice(static_cast<Derived*>(this)->cont_,
+                          start_pos,
+                          end_pos);
+    }
+
+    template <class Derived, class Container>
+    auto BaseSlice<Derived, Container>::operator() (Position pos, int64_t end_pos)
+    -> slice<Container>
+    {
+        assert(pos != all);
+        assert(pos != end);
+
+        //TODO: throw out of range
+        return make_slice(static_cast<Derived*>(this)->cont_,
+                          static_cast<Derived*>(this)->spos_,
+                          end_pos);
+    }
+
+    template <class Derived, class Container>
+    auto BaseSlice<Derived, Container>::operator() (int64_t start_pos, Position pos)
+    -> slice<Container>
+    {
+        assert(pos != all);
+        assert(pos != beg);
+
+        //TODO: throw out of range
+        return make_slice(static_cast<Derived*>(this)->cont_,
+                          start_pos,
+                          static_cast<Derived*>(this)->epos_);
+    }
+
+    template <class Derived, class Container>
+    auto BaseSlice<Derived, Container>::operator() (Position pos)
+    -> slice<Container>
+    {
+        assert(pos == all);
+
+        return make_slice(static_cast<Derived*>(this)->cont_,
+                          static_cast<Derived*>(this)->spos_,
+                          static_cast<Derived*>(this)->epos_ + 1);
+    }
+
+    /*
+     * Class VectorSlice
+     */
+    template <typename ElemType>
+    class VectorSlice: public BaseSlice<VectorSlice<ElemType>, std::vector<ElemType>>
+    {
+    public:
+        using container_type = std::vector<ElemType>;
+        using iterator = typename container_type::iterator;
+        using const_iterator = typename container_type::const_iterator;
+        using size_type = typename container_type::size_type;
+        using self_type = VectorSlice<ElemType>;
+        friend class BaseSlice<self_type, container_type>;
+
+    public:
+        VectorSlice(container_type& cont, size_t end_pos);
+
+        VectorSlice(container_type& cont, size_t start_pos,
+                    size_t end_pos);
+
+    public:
+        iterator begin() noexcept;
+        const_iterator begin() const noexcept;
+        const_iterator cbegin() const noexcept;
+
+        iterator end() noexcept;
+        const_iterator end() const noexcept;
+        const_iterator cend() const noexcept;
+
+    public:
+
+    private:
+        size_t spos_ = 0;
+        size_t epos_ = 0;
+        container_type& cont_;
+    };
+
+    template <typename ElemType>
+    VectorSlice<ElemType>::VectorSlice(VectorSlice<ElemType>::container_type& cont,
+                                       size_t end_pos)
+    : cont_(cont)
+    , epos_(end_pos)
+    { }
+
+
+    template <typename ElemType>
+    VectorSlice<ElemType>::VectorSlice(VectorSlice<ElemType>::container_type& cont,
+                                       size_t start_pos,
+                                       size_t end_pos)
+    : cont_(cont)
+    , spos_(start_pos)
+    , epos_(end_pos)
+    { }
+
+
+    template <typename ElemType>
+    auto VectorSlice<ElemType>::begin() noexcept 
+                                -> typename VectorSlice<ElemType>::iterator
+    {
+        return cont_.begin() + spos_;
+    }
+
+    template <typename ElemType>
+    auto VectorSlice<ElemType>::begin() const noexcept 
+                                -> typename VectorSlice<ElemType>::const_iterator
+    {
+        return cont_.begin() + spos_;
+    }
+
+    template <typename ElemType>
+    auto VectorSlice<ElemType>::cbegin() const noexcept 
+                                -> typename VectorSlice<ElemType>::const_iterator
+    {
+        return begin();
+    }
+
+    template <typename ElemType>
+    auto VectorSlice<ElemType>::end() noexcept 
+                                -> typename VectorSlice<ElemType>::iterator
+    {
+        return cont_.begin() + epos_;
+    }
+
+    template <typename ElemType>
+    auto VectorSlice<ElemType>::end() const noexcept 
+                                -> typename VectorSlice<ElemType>::const_iterator
+    {
+        return cont_.begin() + epos_;
+    }
+
+    template <typename ElemType>
+    auto VectorSlice<ElemType>::cend() const noexcept 
+                                -> typename VectorSlice<ElemType>::const_iterator
+    {
+        return end();
+    }
+
+    /*
+     * Class ListSlice
+     */
+    template <typename ElemType>
+    class ListSlice: public BaseSlice<ListSlice<ElemType>, std::list<ElemType>>{
+    };
+
+
+    /*
+     * Class StringSlice
+     */
+    template <typename ElemType>
+    class StringSlice: public BaseSlice<StringSlice<ElemType>, std::string> {
+    };
+};
+
+/*
+any (s == t[i : i + len(s)] for i in range(len(t) - len(s)))
+
+C++11 algo has added this any_of stuff..
+Looks like we can have string matching just like
+above in c++ too....fingers crossed
+*/
+
+
+template <typename Container>
+class slice : public Container
+{
+public: // Useful typedefs
+    using ElemType = typename Container::value_type;
+    using iterator = typename Container::iterator;
+    using const_iterator = typename Container::const_iterator;
+
+public: //Ctors
+
+    // Constructor flavour 1
+    slice(Container& cont, size_t end_pos);
+
+    // Constructor flavour 2
+    slice(Container& cont, size_t start_pos, size_t end_pos);
+
+public:
+    iterator begin() noexcept              { return impl_.begin(); }
+    const_iterator begin()  const noexcept { return impl_.begin(); }
+    const_iterator cbegin() const noexcept { return begin();       }
+
+    iterator end() noexcept              { return impl_.end(); }
+    const_iterator end()  const noexcept { return impl_.end(); }
+    const_iterator cend() const noexcept { return end();       }
+
+private: 
+    // Use global function 'len' instead of size
+    typename Container::size_type size() const noexcept { return cont_.size(); }
+
+private:
+    using SliceType = typename std::conditional<
+                          std::is_same<Container, std::vector<ElemType>>::value,
+                          detail::VectorSlice<ElemType>,
+                          typename std::conditional<
+                              std::is_same<Container, std::basic_string<ElemType>>::value,
+                              detail::StringSlice<ElemType>,
+                              detail::ListSlice<ElemType>
+                          >::type
+                        >::type;
+
+    SliceType impl_;
+    const Container& cont_;
+};
+
+template <typename Container>
+slice<Container>::slice(
+                      Container& cont,
+                      size_t end_pos): impl_(cont, end_pos)
+                                     , cont_(cont)
+{}
+
+template <typename Container>
+slice<Container>::slice(
+                      Container& cont,
+                      size_t start_pos,
+                      size_t end_pos): impl_(cont, start_pos, end_pos)
+                                     , cont_(cont)
+{}
+
+
+int main() {
+    std::vector<int> vec{1,2,3,4,5,6};
+    auto vslice = make_slice(vec, 2, 5);
+
+    for (auto& v: vslice) { std::cout << v << std::endl; }
+    return 0;
+}
+
