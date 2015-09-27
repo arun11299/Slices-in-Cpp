@@ -329,7 +329,7 @@ above in c++ too....fingers crossed
 
 
 template <typename Container>
-class slice : public Container
+class slice : private Container
 {
 public: // Useful typedefs
     using ElemType = typename Container::value_type;
